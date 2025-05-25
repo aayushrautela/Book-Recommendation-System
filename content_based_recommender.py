@@ -4,135 +4,128 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 
-# --- Configuration ---
 DATA_DIR = 'data'
 
-# --- Load Data ---
-try:
-    books_df = pd.read_csv(os.path.join(DATA_DIR, 'books.csv'))
-    tags_df = pd.read_csv(os.path.join(DATA_DIR, 'tags.csv'))
-    book_tags_df = pd.read_csv(os.path.join(DATA_DIR, 'book_tags.csv'))
-    print("Datasets loaded successfully!")
-except FileNotFoundError as e:
-    print(f"Error loading datasets: {e}")
-    print(f"Please ensure 'books.csv', 'tags.csv', and 'book_tags.csv' are in the '{DATA_DIR}' directory.")
-    exit() # Exit if essential data is missing
+def load_and_prepare_content_data():
+    # Loads book, tags, book_tags data and prepares the content dataframe.
+    try:
+        books_df_orig = pd.read_csv(os.path.join(DATA_DIR, 'books.csv'))
+        tags_df = pd.read_csv(os.path.join(DATA_DIR, 'tags.csv'))
+        book_tags_df = pd.read_csv(os.path.join(DATA_DIR, 'book_tags.csv'))
+        # print("Content-based: Datasets loaded successfully!") # Optional print
+    except FileNotFoundError as e:
+        print(f"Content-based: Error loading datasets: {e}")
+        return None
 
-# --- Data Preprocessing for Content-Based Filtering ---
+    book_tags_with_names_df = pd.merge(book_tags_df, tags_df, on='tag_id')
+    book_all_tags_df = book_tags_with_names_df.groupby('goodreads_book_id')['tag_name'].apply(lambda x: ' '.join(x)).reset_index()
+    book_all_tags_df.rename(columns={'tag_name': 'book_tags_string'}, inplace=True)
 
-# Merge book_tags with tags to get tag names
-book_tags_with_names_df = pd.merge(book_tags_df, tags_df, on='tag_id')
+    books_df_merged = pd.merge(books_df_orig, book_all_tags_df, on='goodreads_book_id', how='left')
+    books_df_merged['authors'] = books_df_merged['authors'].fillna('')
+    books_df_merged['book_tags_string'] = books_df_merged['book_tags_string'].fillna('')
+    books_df_merged['title'] = books_df_merged['title'].fillna('')
+    books_df_merged['content'] = (
+        books_df_merged['title'] + ' ' +
+        books_df_merged['authors'] + ' ' +
+        books_df_merged['book_tags_string']
+    )
+    
+    content_df_intermediate = books_df_merged[['book_id', 'title', 'content', 'goodreads_book_id']].copy()
+    content_df_intermediate.dropna(subset=['content'], inplace=True)
+    
+    if content_df_intermediate.empty:
+        print("Content-based: The content_df is empty after processing.")
+        return None
+        
+    content_df_final_for_indexing = content_df_intermediate.set_index('book_id', drop=False).copy()
+    return content_df_final_for_indexing
 
-# Aggregate all tags for each book into a single string
-book_all_tags_df = book_tags_with_names_df.groupby('goodreads_book_id')['tag_name'].apply(lambda x: ' '.join(x)).reset_index()
-book_all_tags_df.rename(columns={'tag_name': 'book_tags_string'}, inplace=True)
+def build_content_model(content_df_input):
+    # Builds TF-IDF and cosine similarity from content_df.
+    if content_df_input is None or content_df_input.empty:
+        print("Content-based: Input content_df_input is empty. Cannot build model.")
+        return None, None, None, None
 
-# Merge aggregated tags back into the main books_df
-# books_df uses 'goodreads_book_id' which matches 'goodreads_book_id' in book_all_tags_df
-books_df_merged = pd.merge(books_df, book_all_tags_df, on='goodreads_book_id', how='left')
+    if content_df_input['content'].isnull().any():
+        content_df_input['content'] = content_df_input['content'].fillna('')
 
-# Handle missing values
-books_df_merged['authors'] = books_df_merged['authors'].fillna('')
-books_df_merged['book_tags_string'] = books_df_merged['book_tags_string'].fillna('')
-books_df_merged['title'] = books_df_merged['title'].fillna('') # Ensure title is not NaN
+    tfidf_vectorizer = TfidfVectorizer(stop_words='english', min_df=5)
+    try:
+        tfidf_matrix = tfidf_vectorizer.fit_transform(content_df_input['content'])
+    except ValueError as e:
+        print(f"Content-based: Error during TF-IDF: {e}")
+        return None, None, None, None
 
-# Create a 'content' feature string
-books_df_merged['content'] = (
-    books_df_merged['title'] + ' ' +
-    books_df_merged['authors'] + ' ' +
-    books_df_merged['book_tags_string']
-)
+    if tfidf_matrix.shape[0] == 0 or tfidf_matrix.shape[1] == 0:
+        print("Content-based: TF-IDF matrix is empty.")
+        return None, None, None, None
 
-# Prepare DataFrame for TF-IDF
-content_df = books_df_merged[['book_id', 'title', 'content']].copy()
-content_df.dropna(subset=['content'], inplace=True) # Drop rows if content is still NaN
-content_df.set_index('book_id', inplace=True) # Use book_id as index
+    cosine_sim_matrix = cosine_similarity(tfidf_matrix, tfidf_matrix)
+    book_id_to_matrix_idx = pd.Series(range(len(content_df_input)), index=content_df_input['book_id'])
+    
+    # print("Content-based: TF-IDF and Cosine Similarity models built.") # Optional print
+    return cosine_sim_matrix, content_df_input, book_id_to_matrix_idx, tfidf_vectorizer
 
-if content_df.empty:
-    print("Error: The content_df is empty after processing. Cannot proceed.")
-    exit()
-
-# --- TF-IDF Vectorization and Cosine Similarity ---
-print("\n--- TF-IDF Vectorization and Cosine Similarity ---")
-
-if content_df['content'].isnull().any(): # Should have been handled by dropna, but as a safeguard
-    content_df['content'] = content_df['content'].fillna('')
-
-tfidf_vectorizer = TfidfVectorizer(stop_words='english', min_df=5)
-
-try:
-    tfidf_matrix = tfidf_vectorizer.fit_transform(content_df['content'])
-    print("TF-IDF matrix shape:", tfidf_matrix.shape)
-except ValueError as e:
-    print(f"Error during TF-IDF vectorization: {e}")
-    exit()
-
-if tfidf_matrix.shape[0] == 0 or tfidf_matrix.shape[1] == 0:
-    print("Error: TF-IDF matrix is empty. Check 'content_df' and TF-IDF parameters.")
-    exit()
-
-cosine_sim_matrix = cosine_similarity(tfidf_matrix, tfidf_matrix)
-print("Cosine similarity matrix shape:", cosine_sim_matrix.shape)
-
-# Prepare for mapping titles to matrix indices
-content_df_reset_for_indexing = content_df.reset_index()
-title_to_idx_map = pd.Series(content_df_reset_for_indexing.index, index=content_df_reset_for_indexing['title']).drop_duplicates()
-
-# --- Recommendation Function ---
-def get_content_based_recommendations(input_title, top_n=10, cosine_sim_m=cosine_sim_matrix, df_with_titles=content_df_reset_for_indexing, title_idx_map=title_to_idx_map):
-    matched_title = None
-    if input_title in title_idx_map:
-        matched_title = input_title
-    else: # Try to find a match
-        for title_in_db in title_idx_map.index: # Case-insensitive exact match
-            if title_in_db.lower() == input_title.lower():
-                matched_title = title_in_db
-                print(f"Found title by case-insensitive match: '{matched_title}' for input '{input_title}'")
-                break
-        if not matched_title: # Partial match
-            possible_matches = df_with_titles[df_with_titles['title'].str.contains(input_title, case=False, na=False)]
-            if not possible_matches.empty:
-                matched_title = possible_matches['title'].iloc[0]
-                print(f"Found title by partial match: '{matched_title}' for input '{input_title}'")
-            else:
-                return f"Book with title '{input_title}' not found."
-
-    if matched_title not in title_idx_map: # Should not happen if logic above is correct
-        return f"Book with title '{input_title}' (matched as '{matched_title}') still not found in indices."
+def get_content_based_recommendations(input_book_id, top_n=10, cos_sim_matrix=None, books_data_df=None, book_id_to_idx_map=None):
+    # Gets content-based recommendations for a given book_id.
+    if cos_sim_matrix is None or books_data_df is None or book_id_to_idx_map is None:
+        return "Model components not provided."
+    if input_book_id not in book_id_to_idx_map:
+         return f"Book ID {input_book_id} not found in map."
 
     try:
-        book_idx = title_idx_map[matched_title]
+        book_m_idx = book_id_to_idx_map[input_book_id]
     except KeyError:
-         return f"Error finding index for '{matched_title}'." # Should be caught by earlier checks
+         return f"Book ID {input_book_id} key error in map."
 
-    sim_scores_for_book = list(enumerate(cosine_sim_m[book_idx]))
-    sim_scores_for_book_sorted = sorted(sim_scores_for_book, key=lambda x: x[1], reverse=True)
-    top_similar_books_scores = sim_scores_for_book_sorted[1:(top_n + 1)]
-    recommended_book_indices = [i[0] for i in top_similar_books_scores]
+    sim_scores = list(enumerate(cos_sim_matrix[book_m_idx]))
+    sim_scores_sorted = sorted(sim_scores, key=lambda x: x[1], reverse=True)
+    top_scores = sim_scores_sorted[1:(top_n + 1)] 
 
-    recommended_books_with_scores = []
-    for i in range(len(recommended_book_indices)):
-        original_idx = recommended_book_indices[i]
-        title = df_with_titles['title'].iloc[original_idx]
-        score = round(top_similar_books_scores[i][1], 4)
-        recommended_books_with_scores.append((title, score))
+    recs = []
+    for matrix_idx_rec, score_val in top_scores:
+        try:
+            rec_book_id = books_data_df['book_id'].iloc[matrix_idx_rec]
+            rec_book_title = books_data_df['title'].iloc[matrix_idx_rec]
+            recs.append({'book_id': rec_book_id, 'title': rec_book_title, 'score': round(score_val, 4)})
+        except IndexError:
+            # print(f"Content-based: Index error for matrix_idx {matrix_idx_rec}") # Optional
+            continue 
+    return recs
+
+def get_similarity_score_for_book_pair(book_id1, book_id2, cos_sim_matrix=None, book_id_to_idx_map=None):
+    # Gets content similarity between two book_ids.
+    if cos_sim_matrix is None or book_id_to_idx_map is None: return "Model components missing."
+    if book_id1 not in book_id_to_idx_map or book_id2 not in book_id_to_idx_map:
+        return f"One or both Book IDs ({book_id1}, {book_id2}) not in map."
     
-    return recommended_books_with_scores
+    idx1 = book_id_to_idx_map[book_id1]
+    idx2 = book_id_to_idx_map[book_id2]
+    return round(cos_sim_matrix[idx1, idx2], 4)
 
-# --- Example Usage (Content-Based) ---
-if 'cosine_sim_matrix' in locals() and not content_df_reset_for_indexing.empty:
-    example_titles = ["The Hobbit", "To Kill a Mockingbird", "A Non Existent Book Title XYZ123"]
+if __name__ == "__main__":
+    print("Running Content-Based Recommender Standalone...")
     
-    for ex_title in example_titles:
-        print(f"\n--- Content-Based Recommendations for '{ex_title}' (Top 5) ---")
-        recommendations = get_content_based_recommendations(ex_title, top_n=5)
-        
-        if isinstance(recommendations, str):
-            print(recommendations)
-        elif recommendations:
-            for book_title, score in recommendations:
-                print(f"- \"{book_title}\" (Similarity Score: {score})")
-        else:
-            print(f"No recommendations found or an issue occurred for '{ex_title}'.")
-else:
-    print("\nSkipping recommendation example: 'cosine_sim_matrix' or 'content_df_reset_for_indexing' not available.")
+    prepared_data = load_and_prepare_content_data()
+    if prepared_data is not None and not prepared_data.empty:
+        cos_sim, books_data, id_to_idx_map, _ = build_content_model(prepared_data)
+
+        if cos_sim is not None and books_data is not None and id_to_idx_map is not None:
+            example_id = books_data['book_id'].iloc[0]
+            example_title = books_data['title'].iloc[0]
+            print(f"\nContent-Based Recommendations for Book ID: {example_id} ('{example_title}')...")
+            recommendations = get_content_based_recommendations(example_id, 5, cos_sim, books_data, id_to_idx_map)
+            
+            if isinstance(recommendations, str): print(recommendations)
+            elif recommendations:
+                for rec in recommendations: print(f"- \"{rec['title']}\" (ID: {rec['book_id']}, Score: {rec['score']})")
+            else: print("No recommendations found.")
+
+            if len(books_data) > 1:
+                id1 = books_data['book_id'].iloc[0]
+                id2 = books_data['book_id'].iloc[1]
+                score = get_similarity_score_for_book_pair(id1, id2, cos_sim, id_to_idx_map)
+                print(f"\nSimilarity between Book ID {id1} and ID {id2}: {score}")
+        else: print("Content-based model building failed.")
+    else: print("Content-based data preparation failed.")
