@@ -8,8 +8,8 @@ The solution is implemented in Python and utilizes common data science libraries
 
 ## Setup Instructions
 
-1.  **Clone the Repository:**
-    First, clone this repository to your local machine:
+1.  **Clone the Project Repository:**
+    First, clone this project's repository to your local machine:
     ```bash
     git clone [https://github.com/aayushrautela/Book-Recommendation-System.git](https://github.com/aayushrautela/Book-Recommendation-System.git)
     cd Book-Recommendation-System
@@ -24,14 +24,21 @@ The solution is implemented in Python and utilizes common data science libraries
     pip install -r requirements.txt
     ```
 
-3.  **Dataset:**
-    * The **goodbooks-10k** dataset is included in the `data/` directory of this repository.
-    * The essential CSV files (`books.csv`, `ratings.csv`, `tags.csv`, `book_tags.csv`) are already in place.
+3.  **Dataset (goodbooks-10k):**
+    * **Download:** This project uses the **goodbooks-10k** dataset. You need to download it from its original GitHub repository:
+        [https://github.com/zygmuntz/goodbooks-10k](https://github.com/zygmuntz/goodbooks-10k)
+    * **Placement:**
+        * After downloading, create a subdirectory named `data/` in the root of *this cloned project* (i.e., inside the `Book-Recommendation-System` folder).
+        * Extract the downloaded dataset and place the following essential CSV files into this `data/` subdirectory:
+            * `books.csv`
+            * `ratings.csv`
+            * `tags.csv`
+            * `book_tags.csv`
     * The project scripts expect these files to be located at `data/<filename>.csv`.
 
 ## Running the Recommenders
 
-The project consists of three main Python scripts. Each script can be run from the command line using Python. Ensure your terminal's current working directory is the root of the project.
+The project consists of three main Python scripts. Each script can be run from the command line using Python. Ensure your terminal's current working directory is the root of the project (i.e., the `Book-Recommendation-System` directory after cloning).
 
 1.  **Content-Based Recommender (`content_based_recommender.py`)**
     * This script implements the content-based filtering logic.
@@ -66,7 +73,7 @@ The project consists of three main Python scripts. Each script can be run from t
 * `content_based_recommender.py`: Contains all logic for the content-based filtering approach.
 * `collaborative_recommender.py`: Contains all logic for the user-based collaborative filtering approach, including data filtering and sparse matrix operations.
 * `hybrid_recommender.py`: Implements the hybrid model by leveraging the other two modules. It combines their outputs to produce a final set of recommendations.
-* `data/` (directory): Contains the required CSV files from the goodbooks-10k dataset.
+* `data/` (directory): This directory needs to be created by you and populated with the CSV files from the goodbooks-10k dataset as per the "Dataset" instructions.
 * `requirements.txt`: Lists all Python dependencies.
 
 This `README.md` provides the necessary instructions to run and test the code, as required.
