@@ -6,7 +6,7 @@ import content_based_recommender as cb
 import collaborative_recommender as cf
 
 TOP_N_CF_CANDIDATES = 50
-TOP_N_ANCHOR_BOOKS = 3
+TOP_N_ANCHOR_BOOKS = 5
 ALPHA = 0.5 # Weight for content score vs collaborative score
 TOP_N_FINAL = 10
 
