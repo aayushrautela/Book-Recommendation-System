@@ -54,7 +54,7 @@ The project consists of three main Python scripts. Each script can be run from t
     * When run directly, it prints example recommendations for a predefined user and a predicted score for a specific user-book pair.
     * To run:
         ```bash
-        python collaborative_recommender.py
+        python collaborative_recommender.py <user>
         ```
     * **Note:** The filtering parameters within this script (`MIN_RATINGS_PER_USER`, `MIN_RATINGS_PER_BOOK`) may need adjustment based on available system memory. The current values (e.g., 150, 50) have been tested to work on systems with moderate RAM.
 
@@ -65,7 +65,7 @@ The project consists of three main Python scripts. Each script can be run from t
     * The `ALPHA` parameter (for weighting content vs. collaborative scores) and `TOP_N_ANCHOR_BOOKS` can be adjusted within this script.
     * To run:
         ```bash
-        python hybrid_recommender.py
+        python hybrid_recommender.py <user>
         ```
 
 ## Code Structure
