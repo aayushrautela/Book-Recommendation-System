@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This project implements a hybrid book recommendation system combining Content-Based Filtering and User-Based Collaborative Filtering techniques. It is developed as part of the "Introduction to Artificial Intelligence" course (Summer 2025). The system provides book recommendations based on item features and user rating patterns.
+This project implements a hybrid book recommendation system combining Content-Based Filtering and User-Based Collaborative Filtering techniques. The system provides book recommendations based on item features and user rating patterns.
 
 The solution is implemented in Python and utilizes common data science libraries.
 
@@ -11,7 +11,7 @@ The solution is implemented in Python and utilizes common data science libraries
 1.  **Clone the Project Repository:**
     First, clone this project's repository to your local machine:
     ```bash
-    git clone [https://github.com/aayushrautela/Book-Recommendation-System.git](https://github.com/aayushrautela/Book-Recommendation-System.git)
+    git clone https://github.com/aayushrautela/Book-Recommendation-System.git
     cd Book-Recommendation-System
     ```
 
@@ -28,7 +28,7 @@ The solution is implemented in Python and utilizes common data science libraries
     * **Download:** This project uses the **goodbooks-10k** dataset. You need to download it from its original GitHub repository:
         [https://github.com/zygmuntz/goodbooks-10k](https://github.com/zygmuntz/goodbooks-10k)
     * **Placement:**
-        * After downloading, create a subdirectory named `data/` in the root of *this cloned project* (i.e., inside the `Book-Recommendation-System` folder).
+        * After downloading, create a subdirectory named `data/` in the root of folder.
         * Extract the downloaded dataset and place the following essential CSV files into this `data/` subdirectory:
             * `books.csv`
             * `ratings.csv`
@@ -75,5 +75,3 @@ The project consists of three main Python scripts. Each script can be run from t
 * `hybrid_recommender.py`: Implements the hybrid model by leveraging the other two modules. It combines their outputs to produce a final set of recommendations.
 * `data/` (directory): This directory needs to be created by you and populated with the CSV files from the goodbooks-10k dataset as per the "Dataset" instructions.
 * `requirements.txt`: Lists all Python dependencies.
-
-This `README.md` provides the necessary instructions to run and test the code, as required.
