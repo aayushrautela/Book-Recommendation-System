@@ -1,13 +1,14 @@
 import pandas as pd
 import numpy as np
 import os
+import argparse # For command-line arguments
 
 import content_based_recommender as cb
 import collaborative_recommender as cf
 
 TOP_N_CF_CANDIDATES = 50
-TOP_N_ANCHOR_BOOKS = 5
-ALPHA = 0.5 # Weight for content score vs collaborative score
+TOP_N_ANCHOR_BOOKS = 3
+ALPHA = 0.5 
 TOP_N_FINAL = 10
 
 def get_top_n_anchor_books_for_user(user_id, all_ratings_df, books_info_df, top_n=TOP_N_ANCHOR_BOOKS):
@@ -29,7 +30,7 @@ def normalize_scores(scores_dict, new_min=0, new_max=1):
     if not values: return {}
     min_val, max_val = min(values), max(values)
     
-    if max_val == min_val: # All scores are identical
+    if max_val == min_val: 
         return {book_id: (new_min + new_max) / 2.0 for book_id in scores_dict}
     return {
         book_id: new_min + ((score - min_val) * (new_max - new_min) / (max_val - min_val))
@@ -45,7 +46,6 @@ def get_hybrid_recommendations(target_user_id, list_of_anchor_book_ids,
     if not list_of_anchor_book_ids:
         print(f"Hybrid Warning: No anchor books for User ID {target_user_id}. Content scores will be 0.")
 
-    # Get initial candidates from Collaborative Filtering
     cf_recs_list = cf.get_user_based_collaborative_recommendations(
         target_user_id, collab_model_comps, books_data_cf_titles, top_n=top_n_cf_candidates
     )
@@ -63,7 +63,7 @@ def get_hybrid_recommendations(target_user_id, list_of_anchor_book_ids,
         norm_cf = normalized_cf_scores.get(cand_id, 0)
         avg_content_sim = 0.0
 
-        if list_of_anchor_book_ids: # Calculate content score if anchors exist
+        if list_of_anchor_book_ids: 
             content_sims = []
             for anchor_id in list_of_anchor_book_ids:
                 if anchor_id in content_book_id_to_idx_map and cand_id in content_book_id_to_idx_map:
@@ -74,7 +74,7 @@ def get_hybrid_recommendations(target_user_id, list_of_anchor_book_ids,
                         content_sims.append(pair_sim)
             if content_sims: avg_content_sim = sum(content_sims) / len(content_sims)
         
-        norm_content = avg_content_sim # Already 0-1
+        norm_content = avg_content_sim 
 
         hybrid_score = (alpha * norm_content) + ((1 - alpha) * norm_cf)
         final_hybrid_scores[cand_id] = hybrid_score
@@ -89,7 +89,11 @@ def get_hybrid_recommendations(target_user_id, list_of_anchor_book_ids,
     return output_list
 
 if __name__ == "__main__":
-    print("Initializing Hybrid Recommender System...")
+    parser = argparse.ArgumentParser(description="Hybrid Book Recommender System.")
+    parser.add_argument("user_id", type=int, help="User ID for whom to generate recommendations.")
+    args = parser.parse_args()
+
+    print(f"Initializing Hybrid Recommender System for User ID: {args.user_id}...")
 
     cb_data = cb.load_and_prepare_content_data()
     cb_cos_sim, cb_books_df, cb_id_to_idx, _ = (None, None, None, None)
@@ -107,25 +111,27 @@ if __name__ == "__main__":
     if cf_model_comps is None: exit("Hybrid Error: Failed Collaborative Filtering model init.")
     print("Collaborative Filtering Model setup complete.")
 
-    example_user = 75 if 75 in cf_model_comps["unique_user_ids_filtered"] else (
-        cf_model_comps["unique_user_ids_filtered"][0] if cf_model_comps["unique_user_ids_filtered"].size > 0 else None
-    )
-    if example_user is None: exit("\nHybrid Error: No example user ID found.")
+    target_user_for_hybrid = args.user_id
 
-    print(f"\nGenerating Hybrid Recommendations for User ID: {example_user}...")
+    # Check if the provided user_id exists in the filtered CF model
+    if target_user_for_hybrid not in cf_model_comps["unique_user_ids_filtered"]:
+        print(f"\nHybrid Error: User ID {target_user_for_hybrid} not found in the filtered dataset used by the Collaborative Filtering model. Try a different User ID or adjust CF filtering parameters.")
+        exit()
+
+    print(f"\nGenerating Hybrid Recommendations for User ID: {target_user_for_hybrid}...")
     
     anchor_ids = get_top_n_anchor_books_for_user(
-        example_user, cf_model_comps["filtered_ratings_df"], cf_book_titles
+        target_user_for_hybrid, cf_model_comps["filtered_ratings_df"], cf_book_titles
     )
 
     valid_anchors = [aid for aid in anchor_ids if aid in cb_id_to_idx] if anchor_ids else []
     if anchor_ids and not valid_anchors:
-        print(f"Hybrid Warning: User {example_user}'s anchor books not in content model. Content score will be 0.")
+        print(f"Hybrid Warning: User {target_user_for_hybrid}'s anchor books not in content model. Content score will be 0.")
     elif anchor_ids and len(valid_anchors) < len(anchor_ids):
-        print(f"Hybrid Warning: Some anchor books for user {example_user} not in content model.")
+        print(f"Hybrid Warning: Some anchor books for user {target_user_for_hybrid} not in content model.")
 
     hybrid_recs = get_hybrid_recommendations(
-        example_user, valid_anchors,
+        target_user_for_hybrid, valid_anchors,
         cf_model_comps, cf_book_titles,
         cb_cos_sim, cb_books_df, cb_id_to_idx,
         alpha=ALPHA 

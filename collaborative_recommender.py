@@ -3,9 +3,10 @@ import os
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 from scipy.sparse import csr_matrix
+import argparse # For command-line arguments
 
 DATA_DIR = 'data'
-MIN_RATINGS_PER_USER = 150 # For managing memory
+MIN_RATINGS_PER_USER = 150
 MIN_RATINGS_PER_BOOK = 50
 
 def load_and_filter_collaborative_data(min_ratings_user, min_ratings_book):
@@ -13,7 +14,6 @@ def load_and_filter_collaborative_data(min_ratings_user, min_ratings_book):
     try:
         ratings_orig = pd.read_csv(os.path.join(DATA_DIR, 'ratings.csv'))
         books_info = pd.read_csv(os.path.join(DATA_DIR, 'books.csv'))[['book_id', 'title']]
-        # print("Collaborative: Data loaded.") # Optional
     except FileNotFoundError as e:
         print(f"Collaborative: Error loading: {e}")
         return None, None
@@ -26,7 +26,6 @@ def load_and_filter_collaborative_data(min_ratings_user, min_ratings_book):
     popular_books = book_counts[book_counts >= min_ratings_book].index
     final_ratings = ratings_f_users[ratings_f_users['book_id'].isin(popular_books)].copy()
 
-    # print(f"Collaborative: Filtered ratings: {len(final_ratings)}") # Optional
     if final_ratings.empty:
         print("Collaborative: No data post-filtering.")
         return None, None
@@ -54,7 +53,6 @@ def build_collaborative_model_components(filtered_ratings_df):
             (filtered_ratings_df['rating'].values, (mapped_user_idx, mapped_book_idx)),
             shape=(num_users, num_books)
         )
-        # print("Collaborative: Sparse Matrix shape:", sp_matrix.shape) # Optional
     except Exception as e:
         print(f"Collaborative: Sparse matrix error: {e}")
         return None
@@ -69,7 +67,6 @@ def build_collaborative_model_components(filtered_ratings_df):
         return None
 
     u_sim_df = pd.DataFrame(u_sim_dense, index=u_ids, columns=u_ids)
-    # print("Collaborative: User Similarity DF shape:", u_sim_df.shape) # Optional
     
     return {
         "user_similarity_df": u_sim_df, "sparse_user_item_matrix": sp_matrix,
@@ -127,7 +124,7 @@ def get_user_based_collaborative_recommendations(user_id, model_comps, books_inf
     rated_book_indices = sp_matrix[user_m_idx, :].indices
     
     cand_scores = {}
-    for book_m_idx in range(sp_matrix.shape[1]): # Iterate all book model indices
+    for book_m_idx in range(sp_matrix.shape[1]): 
         if book_m_idx not in rated_book_indices:
             orig_book_id = idx_to_book[book_m_idx]
             pred_score = get_collaborative_score_for_user_book_pair(
@@ -147,40 +144,42 @@ def get_user_based_collaborative_recommendations(user_id, model_comps, books_inf
     return final_list
 
 if __name__ == "__main__":
-    print("Running Collaborative Recommender Standalone...")
+    parser = argparse.ArgumentParser(description="User-Based Collaborative Filtering Recommender.")
+    parser.add_argument("user_id", type=int, help="User ID for whom to generate recommendations.")
+    args = parser.parse_args()
+
+    print(f"Running Collaborative Recommender Standalone for User ID: {args.user_id}...")
     
     ratings, books = load_and_filter_collaborative_data(MIN_RATINGS_PER_USER, MIN_RATINGS_PER_BOOK)
     if ratings is not None and books is not None:
         model_components = build_collaborative_model_components(ratings)
         
         if model_components:
-            example_user = (75 if 75 in model_components["unique_user_ids_filtered"] 
-                            else model_components["unique_user_ids_filtered"][0] 
-                            if model_components["unique_user_ids_filtered"].size > 0 else None)
+            target_user_for_recs = args.user_id
             
-            if example_user:
-                print(f"\nCollaborative Recs for User ID: {example_user} (Top 5)...")
-                recs = get_user_based_collaborative_recommendations(example_user, model_components, books, 5)
+            # Check if the provided user_id exists in the filtered model
+            if target_user_for_recs not in model_components["unique_user_ids_filtered"]:
+                print(f"User ID {target_user_for_recs} not found in the filtered dataset after applying MIN_RATINGS_PER_USER={MIN_RATINGS_PER_USER}. Try a different User ID or adjust filtering.")
+            else:
+                print(f"\nCollaborative Recs for User ID: {target_user_for_recs} (Top 5)...")
+                recs = get_user_based_collaborative_recommendations(target_user_for_recs, model_components, books, 5)
                 if isinstance(recs, str): print(recs)
                 elif recs:
                     for r in recs: print(f"- \"{r['title']}\" (ID: {r['book_id']}, Score: {r['score']})")
-                else: print(f"No recs for User {example_user}")
+                else: print(f"No recs for User {target_user_for_recs}")
 
+                # Test single pair scoring for this user, if possible
                 if model_components["unique_book_ids_filtered"].size > 0:
                     bid_score_test = None
-                    user_m_idx_ex = model_components["user_to_idx"][example_user]
+                    user_m_idx_ex = model_components["user_to_idx"][target_user_for_recs]
                     for b_test_id in model_components["unique_book_ids_filtered"]:
                         b_m_idx_test = model_components["book_to_idx"][b_test_id]
                         if model_components["sparse_user_item_matrix"][user_m_idx_ex, b_m_idx_test] == 0: # Not rated
                             bid_score_test = b_test_id
                             break
                     if bid_score_test:
-                        score = get_collaborative_score_for_user_book_pair(example_user, bid_score_test, model_components)
+                        score = get_collaborative_score_for_user_book_pair(target_user_for_recs, bid_score_test, model_components)
                         title = books.loc[books['book_id'] == bid_score_test, 'title'].iloc[0]
-                        print(f"\nPredicted score for User {example_user}, Book {bid_score_test} ('{title}'): {score}")
-            else: print("No example user in filtered data.")
-            
-            print(f"\nCollaborative Recs for User ID: 0 (Non-existent)...")
-            print(get_user_based_collaborative_recommendations(0, model_components, books))
+                        print(f"\nPredicted score for User {target_user_for_recs}, Book {bid_score_test} ('{title}'): {score}")
         else: print("Collaborative model building failed.")
     else: print("Collaborative data loading/filtering failed.")
