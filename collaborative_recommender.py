@@ -7,9 +7,9 @@ import argparse
 import heapq 
 
 DATA_DIR = 'data'
-MIN_RATINGS_FOR_NEIGHBOR_CONSIDERATION = 200 # Min ratings for a user to be a potential neighbor.
+MIN_RATINGS_FOR_NEIGHBOR_CONSIDERATION = 175 # Min ratings for a user to be a potential neighbor. Lower if its takking too lomg.
 
-DEFAULT_K_SIMILAR = 15 # Default number of similar users to find.
+DEFAULT_K_SIMILAR = 10 # Default number of similar users to find.
 DEFAULT_N_RECS = 5     # Default number of recommendations to return.
 
 def load_all_collaborative_data():

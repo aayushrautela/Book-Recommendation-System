@@ -7,8 +7,8 @@ import content_based_recommender as cb
 import collaborative_recommender as cf 
 
 TOP_N_CF_CANDIDATES = 50 # Initial candidates from CF for hybrid processing.
-TOP_N_ANCHOR_BOOKS = 3   # Number of user's top books for content matching.
-ALPHA = 0.5              # Weight for combining content vs. collaborative scores.
+TOP_N_ANCHOR_BOOKS = 5   # Number of user's top books for content matching.
+ALPHA = 0.40              # Weight for combining content vs. collaborative scores.
 TOP_N_FINAL = 10         # Final number of hybrid recommendations.
 
 def get_top_n_anchor_books_for_user(user_id, ratings_data_to_use, books_info_df, top_n=TOP_N_ANCHOR_BOOKS):
