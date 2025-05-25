@@ -7,12 +7,12 @@ import content_based_recommender as cb
 import collaborative_recommender as cf
 
 TOP_N_CF_CANDIDATES = 50
-TOP_N_ANCHOR_BOOKS = 5
-ALPHA = 0.5 # Weight: content score vs collaborative score
+TOP_N_ANCHOR_BOOKS = 5 # Used by get_top_n_anchor_books_for_user
+ALPHA = 0.5 
 TOP_N_FINAL = 10
 
 def get_top_n_anchor_books_for_user(user_id, ratings_data_to_use, books_info_df, top_n=TOP_N_ANCHOR_BOOKS):
-    # Gets user's top N rated books as content anchors from the provided ratings data.
+    # Gets user's top N rated books as content anchors.
     user_ratings = ratings_data_to_use[ratings_data_to_use['user_id'] == user_id]
     if user_ratings.empty: return []
 
@@ -21,17 +21,17 @@ def get_top_n_anchor_books_for_user(user_id, ratings_data_to_use, books_info_df,
     if top_rated_books_df.empty: return []
         
     anchor_book_ids = top_rated_books_df['book_id'].tolist()
-    print(f"Hybrid: Identified {len(anchor_book_ids)} anchor(s) for User ID {user_id}.") # Feedback
+    print(f"Hybrid: Identified {len(anchor_book_ids)} anchor(s) for User ID {user_id}.")
     return anchor_book_ids
 
 def normalize_scores(scores_dict, new_min=0, new_max=1):
-    # Scales a dictionary of scores to a 0-1 range.
+    # Scales scores to a 0-1 range.
     if not scores_dict: return {}
     values = list(scores_dict.values())
     if not values: return {}
     min_val, max_val = min(values), max(values)
     
-    if max_val == min_val: # Avoid division by zero if all scores are identical
+    if max_val == min_val: 
         return {book_id: (new_min + new_max) / 2.0 for book_id in scores_dict}
     return {
         book_id: new_min + ((score - min_val) * (new_max - new_min) / (max_val - min_val))
@@ -43,10 +43,9 @@ def get_hybrid_recommendations(target_user_id, list_of_anchor_book_ids,
                                content_cos_sim_matrix, content_books_data_for_cb, content_book_id_to_idx_map,
                                top_n_cf_candidates=TOP_N_CF_CANDIDATES, alpha=ALPHA, top_n_final=TOP_N_FINAL):
     # Generates hybrid recommendations.
-    if not list_of_anchor_book_ids and alpha > 0: # Content part has weight but no anchors
-        print(f"Hybrid Warning: No anchor books for User ID {target_user_id} to use for content scoring.")
+    if not list_of_anchor_book_ids and alpha > 0:
+        print(f"Hybrid Warning: No anchor books for User ID {target_user_id} for content scoring.")
 
-    # Get CF candidates
     cf_recs_list = cf.get_user_based_collaborative_recommendations(
         target_user_id, collab_model_comps, books_data_cf_titles, top_n=top_n_cf_candidates
     )
@@ -62,22 +61,20 @@ def get_hybrid_recommendations(target_user_id, list_of_anchor_book_ids,
 
     for cand_id in candidate_ids:
         norm_cf = normalized_cf_scores.get(cand_id, 0)
-        avg_content_sim = 0.0 # Default content score
+        avg_content_sim = 0.0
 
-        if list_of_anchor_book_ids and alpha > 0: # Only compute if anchors exist and content matters
+        if list_of_anchor_book_ids and alpha > 0: 
             content_sims = []
             for anchor_id in list_of_anchor_book_ids:
-                # Ensure both anchor and candidate are in the content model's map
                 if anchor_id in content_book_id_to_idx_map and cand_id in content_book_id_to_idx_map:
                     pair_sim = cb.get_similarity_score_for_book_pair(
                         anchor_id, cand_id, content_cos_sim_matrix, content_book_id_to_idx_map
                     )
-                    if isinstance(pair_sim, (float, np.float32, np.float64)): # Check for valid score
+                    if isinstance(pair_sim, (float, np.number)): # Check for valid numeric score
                         content_sims.append(pair_sim)
             if content_sims: avg_content_sim = sum(content_sims) / len(content_sims)
         
-        norm_content = avg_content_sim # Assumed to be 0-1 from cosine similarity
-
+        norm_content = avg_content_sim 
         hybrid_score = (alpha * norm_content) + ((1 - alpha) * norm_cf)
         final_hybrid_scores[cand_id] = hybrid_score
 
@@ -97,7 +94,6 @@ if __name__ == "__main__":
 
     print(f"Initializing Hybrid Recommender System for User ID: {args.user_id}...")
 
-    # Setup Content-Based Model
     cb_data = cb.load_and_prepare_content_data()
     cb_cos_sim, cb_books_df_for_cb, cb_id_to_idx, _ = (None, None, None, None)
     if cb_data is not None and not cb_data.empty:
@@ -105,7 +101,6 @@ if __name__ == "__main__":
     if cb_cos_sim is None: exit("Hybrid Error: Failed Content-Based model init.")
     print("Content-Based Model setup complete.")
 
-    # Setup Collaborative Filtering Model (and get original ratings)
     cf_ratings_filtered, cf_book_titles, cf_ratings_original = cf.load_and_filter_collaborative_data(
         cf.MIN_RATINGS_PER_USER, cf.MIN_RATINGS_PER_BOOK
     )
@@ -128,7 +123,6 @@ if __name__ == "__main__":
 
     if user_in_cf_model:
         print(f"User ID {target_user_for_hybrid} found in CF model. Proceeding with Hybrid Recommendations.")
-        # For users in CF model, anchor books from their (filtered) CF interactions might be more relevant for hybrid
         anchor_ids = get_top_n_anchor_books_for_user(
             target_user_for_hybrid, cf_model_comps["filtered_ratings_df"], cf_book_titles
         )
@@ -147,31 +141,55 @@ if __name__ == "__main__":
         else:
             print(f"Hybrid: No hybrid recommendations generated for User ID {target_user_for_hybrid}.")
 
-    else: # Fallback to Content-Based
+    else: # Fallback to Content-Based using multiple anchors
         print(f"User ID {target_user_for_hybrid} not in CF model or CF model failed. Attempting Content-Based Fallback.")
-        anchor_ids = get_top_n_anchor_books_for_user(
-            target_user_for_hybrid, cf_ratings_original, cf_book_titles # Use original ratings for fallback anchors
+        anchor_ids = get_top_n_anchor_books_for_user( # Get up to TOP_N_ANCHOR_BOOKS
+            target_user_for_hybrid, cf_ratings_original, cf_book_titles 
         )
         if not anchor_ids:
             print(f"Fallback: No anchor books found for User ID {target_user_for_hybrid}. Cannot provide content-based recommendations.")
         else:
-            valid_anchors_for_cb = [aid for aid in anchor_ids if aid in cb_id_to_idx]
-            if not valid_anchors_for_cb:
+            valid_anchors_for_cb_fallback = [aid for aid in anchor_ids if aid in cb_id_to_idx]
+            if not valid_anchors_for_cb_fallback:
                 print(f"Fallback: Anchor books for User {target_user_for_hybrid} found, but none exist in content model.")
             else:
-                print(f"Fallback: Using {len(valid_anchors_for_cb)} anchor book(s) for pure content-based recommendations.")
-                # Simple fallback: use the first valid anchor book
-                first_valid_anchor = valid_anchors_for_cb[0]
-                cb_fallback_recs = cb.get_content_based_recommendations(
-                    first_valid_anchor, top_n=TOP_N_FINAL,
-                    cos_sim_matrix=cb_cos_sim, books_data_df=cb_books_df_for_cb,
-                    book_id_to_idx_map=cb_id_to_idx
-                )
-                if isinstance(cb_fallback_recs, str): 
-                    print(f"Fallback Error: {cb_fallback_recs}")
-                elif cb_fallback_recs:
-                    print(f"\nTop {TOP_N_FINAL} Content-Based Fallback Recommendations (based on anchor ID {first_valid_anchor}):")
-                    for r in cb_fallback_recs:
-                        print(f"- \"{r['title']}\" (Book ID: {r['book_id']}, Similarity Score: {r['score']})")
+                print(f"Fallback: Using {len(valid_anchors_for_cb_fallback)} valid anchor book(s) for pure content-based recommendations.")
+                
+                aggregated_cb_recs = {} # To store {book_id: {'title': title, 'highest_score': score}}
+                
+                for anchor_book_id in valid_anchors_for_cb_fallback:
+                    # Get recommendations based on this single anchor
+                    cb_recs_for_anchor = cb.get_content_based_recommendations(
+                        anchor_book_id, 
+                        top_n=(TOP_N_FINAL * 2), # Get more candidates per anchor initially
+                        cos_sim_matrix=cb_cos_sim,
+                        books_data_df=cb_books_df_for_cb, 
+                        book_id_to_idx_map=cb_id_to_idx
+                    )
+                    if isinstance(cb_recs_for_anchor, list):
+                        for rec in cb_recs_for_anchor:
+                            rec_book_id = rec['book_id']
+                            # Exclude anchor books themselves from being recommended
+                            if rec_book_id in valid_anchors_for_cb_fallback and rec_book_id != anchor_book_id : # Allow if recommended by OTHER anchors
+                                pass # Re-evaluate this logic if anchors should never be in final list
+                            
+                            if rec_book_id not in aggregated_cb_recs or rec['score'] > aggregated_cb_recs[rec_book_id]['highest_score']:
+                                aggregated_cb_recs[rec_book_id] = {
+                                    'title': rec['title'], 
+                                    'highest_score': rec['score']
+                                }
+                
+                if aggregated_cb_recs:
+                    # Sort aggregated recommendations by the highest score
+                    sorted_aggregated_recs = sorted(
+                        aggregated_cb_recs.items(), 
+                        key=lambda item: item[1]['highest_score'], 
+                        reverse=True
+                    )
+                    
+                    print(f"\nTop {TOP_N_FINAL} Content-Based Fallback Recommendations (aggregated from anchors):")
+                    for i, (book_id, rec_data) in enumerate(sorted_aggregated_recs):
+                        if i >= TOP_N_FINAL: break
+                        print(f"- \"{rec_data['title']}\" (Book ID: {book_id}, Highest Similarity Score: {rec_data['highest_score']})")
                 else:
-                    print(f"Fallback: No content-based recommendations for anchor ID {first_valid_anchor}.")
+                    print(f"Fallback: No content-based recommendations could be aggregated from the anchor book(s).")
