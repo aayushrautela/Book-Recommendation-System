@@ -3,201 +3,209 @@ import os
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 from scipy.sparse import csr_matrix
-import argparse # For command-line arguments
+import argparse
+import heapq 
 
 DATA_DIR = 'data'
-MIN_RATINGS_PER_USER = 150 # For managing memory; used in __main__ if not overridden
-MIN_RATINGS_PER_BOOK = 50  # For managing memory; used in __main__ if not overridden
+MIN_RATINGS_FOR_NEIGHBOR_CONSIDERATION = 200 # Value from your last successful run
 
-def load_and_filter_collaborative_data(min_ratings_user, min_ratings_book):
-    # Loads ratings and books data, filters it, and returns both original and filtered ratings.
+DEFAULT_K_SIMILAR = 15
+DEFAULT_N_RECS = 5
+
+def load_all_collaborative_data():
+    # Loads all ratings and books data.
     try:
-        ratings_orig = pd.read_csv(os.path.join(DATA_DIR, 'ratings.csv'))
-        books_info = pd.read_csv(os.path.join(DATA_DIR, 'books.csv'))[['book_id', 'title']]
+        ratings_all_df = pd.read_csv(os.path.join(DATA_DIR, 'ratings.csv'))
+        books_info_df = pd.read_csv(os.path.join(DATA_DIR, 'books.csv'))[['book_id', 'title']]
     except FileNotFoundError as e:
         print(f"Collaborative: Error loading essential data: {e}")
-        return None, None, None # Filtered ratings, books info, original ratings
+        return None, None, None
+    return ratings_all_df, books_info_df, ratings_all_df # Pass original ratings too for hybrid
 
-    # print(f"Collaborative: Original ratings: {len(ratings_orig)}") # Optional print
-    
-    user_counts = ratings_orig['user_id'].value_counts()
-    active_users = user_counts[user_counts >= min_ratings_user].index
-    ratings_f_users = ratings_orig[ratings_orig['user_id'].isin(active_users)]
-
-    book_counts = ratings_f_users['book_id'].value_counts()
-    popular_books = book_counts[book_counts >= min_ratings_book].index
-    final_filtered_ratings = ratings_f_users[ratings_f_users['book_id'].isin(popular_books)].copy()
-
-    # print(f"Collaborative: Filtered ratings count: {len(final_filtered_ratings)}") # Optional print
-    if final_filtered_ratings.empty:
-        print("Collaborative: No data remains after filtering for the CF model.")
-        # Still return books_info and ratings_orig as they might be useful for other purposes (e.g., anchor selection)
-        return final_filtered_ratings, books_info, ratings_orig 
-        
-    return final_filtered_ratings, books_info, ratings_orig
-
-def build_collaborative_model_components(filtered_ratings_df_for_model):
-    # Builds CF model components from the (already filtered) ratings data.
-    if filtered_ratings_df_for_model is None or filtered_ratings_df_for_model.empty: 
-        print("Collaborative: Filtered ratings data is empty. Cannot build CF model components.")
+def build_collaborative_model_components_on_all_data(all_ratings_df_input):
+    # Builds CF model components, with mean centering.
+    if all_ratings_df_input is None or all_ratings_df_input.empty: 
+        print("Collaborative: Ratings data is empty. Cannot build model.")
         return None
 
-    num_users = filtered_ratings_df_for_model['user_id'].nunique()
-    num_books = filtered_ratings_df_for_model['book_id'].nunique()
+    all_ratings_df = all_ratings_df_input.copy()
+    user_averages = all_ratings_df.groupby('user_id')['rating'].mean()
+    all_ratings_df['rating_centered'] = all_ratings_df.apply(
+        lambda row: row['rating'] - user_averages.get(row['user_id'], row['rating']), axis=1
+    )
 
-    u_ids = filtered_ratings_df_for_model['user_id'].unique()
+    u_ids = sorted(all_ratings_df['user_id'].unique())
     user_map = {uid: i for i, uid in enumerate(u_ids)}
     idx_to_user = {i: uid for uid, i in user_map.items()}
-    b_ids = filtered_ratings_df_for_model['book_id'].unique()
+    
+    b_ids = sorted(all_ratings_df['book_id'].unique())
     book_map = {bid: i for i, bid in enumerate(b_ids)}
     idx_to_book = {i: bid for bid, i in book_map.items()}
 
-    mapped_user_idx = filtered_ratings_df_for_model['user_id'].map(user_map)
-    mapped_book_idx = filtered_ratings_df_for_model['book_id'].map(book_map)
+    all_ratings_df['user_idx'] = all_ratings_df['user_id'].map(user_map)
+    all_ratings_df['book_idx'] = all_ratings_df['book_id'].map(book_map)
+    
+    existing_ratings_set = set(zip(all_ratings_df['user_idx'], all_ratings_df['book_idx']))
 
     try:
         sp_matrix = csr_matrix(
-            (filtered_ratings_df_for_model['rating'].values, (mapped_user_idx, mapped_book_idx)),
-            shape=(num_users, num_books)
+            (all_ratings_df['rating_centered'].values, 
+             (all_ratings_df['user_idx'].values, all_ratings_df['book_idx'].values)),
+            shape=(len(u_ids), len(b_ids))
         )
     except Exception as e:
         print(f"Collaborative: Sparse matrix creation error: {e}")
         return None
-
-    try:
-        u_sim_dense = cosine_similarity(sp_matrix)
-    except MemoryError:
-        print(f"Collaborative: MemoryError during user similarity calculation (users: {num_users}). Consider increasing filtering thresholds.")
-        return None
-    except Exception as e:
-        print(f"Collaborative: User similarity calculation error: {e}")
-        return None
-
-    u_sim_df = pd.DataFrame(u_sim_dense, index=u_ids, columns=u_ids)
     
     return {
-        "user_similarity_df": u_sim_df, "sparse_user_item_matrix": sp_matrix,
+        "sparse_user_item_matrix": sp_matrix, 
         "user_to_idx": user_map, "idx_to_user": idx_to_user,
         "book_to_idx": book_map, "idx_to_book": idx_to_book,
-        "unique_user_ids_filtered": u_ids, "unique_book_ids_filtered": b_ids,
-        "filtered_ratings_df": filtered_ratings_df_for_model # The ratings df used to build this model
+        "all_user_ids": u_ids, "all_book_ids": b_ids,
+        "user_averages": user_averages,
+        "existing_ratings_set": existing_ratings_set
     }
 
-def get_collaborative_score_for_user_book_pair(user_id, book_id, model_comps, min_sim_users=5, min_sim_thresh=0.1):
-    # Predicts a score for a single user-book pair.
+def find_top_n_similar_users_on_fly(target_user_m_idx, sparse_matrix, n=DEFAULT_K_SIMILAR, min_ratings_neighbor=MIN_RATINGS_FOR_NEIGHBOR_CONSIDERATION): # Uses default K
+    # Finds top N similar users on-the-fly.
+    if target_user_m_idx is None or target_user_m_idx >= sparse_matrix.shape[0]: return []
+
+    target_vector = sparse_matrix[target_user_m_idx]
+    user_rating_counts = np.array(sparse_matrix.getnnz(axis=1)) 
+
+    similar_users_heap = []
+    for other_user_m_idx in range(sparse_matrix.shape[0]):
+        if other_user_m_idx == target_user_m_idx: continue
+        if user_rating_counts[other_user_m_idx] < min_ratings_neighbor: continue
+
+        other_vector = sparse_matrix[other_user_m_idx]
+        similarity = cosine_similarity(target_vector, other_vector)[0, 0]
+
+        if similarity > 0: 
+            if len(similar_users_heap) < n:
+                heapq.heappush(similar_users_heap, (similarity, other_user_m_idx))
+            else:
+                heapq.heappushpop(similar_users_heap, (similarity, other_user_m_idx))
+    
+    return sorted(similar_users_heap, key=lambda x: x[0], reverse=True)
+
+def get_collaborative_score_for_user_book_pair_on_fly(user_id, book_id, model_comps, top_k_similar=DEFAULT_K_SIMILAR): # Uses default K
+    # Predicts score for one user-book pair.
     if model_comps is None: return "CF Model components missing."
     
-    user_sim_df = model_comps["user_similarity_df"]
-    sp_matrix = model_comps["sparse_user_item_matrix"]
+    sp_matrix = model_comps["sparse_user_item_matrix"] 
     user_map = model_comps["user_to_idx"]
     book_map = model_comps["book_to_idx"]
+    user_averages = model_comps["user_averages"]
+    existing_ratings_set = model_comps["existing_ratings_set"]
 
-    if user_id not in user_map: return f"User {user_id} not in CF model."
-    if book_id not in book_map: return f"Book {book_id} not in CF model."
+    if user_id not in user_map: return f"User {user_id} not in model."
+    if book_id not in book_map: return f"Book {book_id} not in model."
 
     user_m_idx, book_m_idx = user_map[user_id], book_map[book_id]
-    if sp_matrix[user_m_idx, book_m_idx] > 0: return "User has already rated this book." # Or return actual rating
+    if (user_m_idx, book_m_idx) in existing_ratings_set:
+        return "User has already rated this book."
 
-    sim_users_s = user_sim_df[user_id].sort_values(ascending=False)
-    sim_users_s = sim_users_s.drop(user_id, errors='ignore')[sim_users_s > min_sim_thresh]
+    similar_users_data = find_top_n_similar_users_on_fly(user_m_idx, sp_matrix, n=top_k_similar)
+    if not similar_users_data: return f"Not enough similar users found for {user_id}."
 
-    if len(sim_users_s) < min_sim_users: return f"Not enough similar users found for {user_id}."
-
-    sim_ids = sim_users_s.index.tolist()
-    weighted_sum, sim_sum = 0.0, 0.0 # Ensure float for division
-    
-    for sim_uid in sim_ids:
-        if sim_uid not in user_map: continue # Should not happen if IDs from user_sim_df index
-        sim_m_idx = user_map[sim_uid]
-        rating = sp_matrix[sim_m_idx, book_m_idx]
-        if rating > 0: # If similar user rated this book
-            sim_val = sim_users_s[sim_uid]
-            weighted_sum += (sim_val * rating)
-            sim_sum += sim_val
+    weighted_sum_centered_ratings, sim_sum = 0.0, 0.0
+    for similarity_val, sim_m_idx in similar_users_data:
+        if (sim_m_idx, book_m_idx) in existing_ratings_set:
+            centered_rating_by_similar_user = sp_matrix[sim_m_idx, book_m_idx]
+            weighted_sum_centered_ratings += (similarity_val * centered_rating_by_similar_user)
+            sim_sum += similarity_val
             
-    if sim_sum > 0: return round(weighted_sum / sim_sum, 4)
-    return f"Could not predict for Book {book_id} for User {user_id} (no similar users who rated it were found)."
+    if sim_sum > 0:
+        predicted_centered_score = weighted_sum_centered_ratings / sim_sum
+        target_user_avg_r = user_averages.get(user_id)
+        
+        if target_user_avg_r is None: 
+            return round(predicted_centered_score, 4) 
+            
+        final_predicted_score = predicted_centered_score + target_user_avg_r
+        final_predicted_score = np.clip(final_predicted_score, 1.0, 5.0) 
+        return round(final_predicted_score, 4)
+        
+    return f"Could not predict for Book {book_id} for User {user_id}."
 
-def get_user_based_collaborative_recommendations(user_id, model_comps, books_info_df, top_n=10, min_sim_users=5, min_sim_thresh=0.1):
-    # Gets top N collaborative recommendations for a user.
+
+def get_user_based_collaborative_recommendations_on_fly(user_id, model_comps, books_info_df, 
+                                                      top_n_recs=DEFAULT_N_RECS, # Uses default N
+                                                      top_k_similar_users=DEFAULT_K_SIMILAR): # Uses default K
+    # Gets top N recommendations.
     if model_comps is None: return "CF Model components missing."
     
     user_map = model_comps["user_to_idx"]
     idx_to_book = model_comps["idx_to_book"]
-    sp_matrix = model_comps["sparse_user_item_matrix"]
-
+    existing_ratings_set = model_comps["existing_ratings_set"]
+    
     if user_id not in user_map: return f"User {user_id} not in CF model."
     user_m_idx = user_map[user_id]
-    rated_book_indices = sp_matrix[user_m_idx, :].indices # Get column indices of books user rated
     
-    cand_scores = {}
-    for book_m_idx in range(sp_matrix.shape[1]): # Iterate through all book indices in the model
-        if book_m_idx not in rated_book_indices: # If user hasn't rated this book
-            orig_book_id = idx_to_book[book_m_idx]
-            pred_score = get_collaborative_score_for_user_book_pair(
-                user_id, orig_book_id, model_comps, min_sim_users, min_sim_thresh
-            )
-            if isinstance(pred_score, float): cand_scores[orig_book_id] = pred_score
+    print(f"Collaborative (on-fly, mean-centered): Finding {top_k_similar_users} similar users for User ID {user_id}...")
+    similar_users_with_scores = find_top_n_similar_users_on_fly(
+        user_m_idx, model_comps["sparse_user_item_matrix"], n=top_k_similar_users
+    )
     
-    if not cand_scores: return f"No scores could be predicted for User {user_id}."
+    if not similar_users_with_scores:
+        return f"No similar users found for User {user_id}."
 
-    sorted_recs = sorted(cand_scores.items(), key=lambda item: item[1], reverse=True)
+    candidate_scores = {}
+    for original_book_id in model_comps["all_book_ids"]: 
+        book_m_idx = model_comps["book_to_idx"].get(original_book_id)
+        if book_m_idx is None: continue
+
+        if (user_m_idx, book_m_idx) not in existing_ratings_set:
+            pred_score = get_collaborative_score_for_user_book_pair_on_fly( 
+                user_id, original_book_id, model_comps, top_k_similar=top_k_similar_users 
+            )
+            if isinstance(pred_score, float): 
+                candidate_scores[original_book_id] = pred_score
+    
+    if not candidate_scores: return f"No scores predicted for User {user_id}."
+
+    sorted_recs = sorted(candidate_scores.items(), key=lambda item: item[1], reverse=True)
     
     final_list = []
-    for orig_book_id, score in sorted_recs[:top_n]:
+    for orig_book_id, score in sorted_recs[:top_n_recs]: # Use top_n_recs here
         title_s = books_info_df.loc[books_info_df['book_id'] == orig_book_id, 'title']
         title = title_s.iloc[0] if not title_s.empty else f"Book ID {orig_book_id}"
         final_list.append({'book_id': orig_book_id, 'title': title, 'score': score})
     return final_list
 
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="User-Based Collaborative Filtering Recommender.")
-    parser.add_argument("user_id", type=int, help="User ID for whom to generate recommendations.")
+    parser = argparse.ArgumentParser(description="On-the-fly User-Based CF Recommender with Mean Centering.")
+    parser.add_argument("user_id", type=int, help="User ID for recommendations.")
+    # Removed --k_similar and --n_recs arguments as they are now hardcoded via defaults
     args = parser.parse_args()
 
-    print(f"Running Collaborative Recommender Standalone for User ID: {args.user_id}...")
+    print(f"Running On-the-fly Collaborative Recommender (Mean Centered) for User ID: {args.user_id}...")
     
-    # Load_and_filter now returns three items
-    ratings_for_model, books_information, ratings_original_full = load_and_filter_collaborative_data(
-        MIN_RATINGS_PER_USER, MIN_RATINGS_PER_BOOK
-    )
+    all_ratings, books_info, _ = load_all_collaborative_data() # _ to unpack original ratings, not used in standalone
     
-    # Check if data loading was successful before proceeding
-    if ratings_original_full is None or books_information is None:
-        exit("Collaborative: Failed to load essential data. Exiting.")
+    if all_ratings is None or books_info is None:
+        exit("Collaborative: Failed to load data.")
 
-    model_components = None
-    if ratings_for_model is not None and not ratings_for_model.empty:
-        model_components = build_collaborative_model_components(ratings_for_model)
+    model_components = build_collaborative_model_components_on_all_data(all_ratings)
         
     if model_components:
-        target_user_for_recs = args.user_id
-        
-        if target_user_for_recs not in model_components["unique_user_ids_filtered"]:
-            print(f"User ID {target_user_for_recs} not in the filtered dataset for CF model (MIN_RATINGS_PER_USER={MIN_RATINGS_PER_USER}).")
+        target_user = args.user_id
+        if target_user not in model_components["all_user_ids"]:
+            print(f"User ID {target_user} not found in the dataset.")
         else:
-            print(f"\nCollaborative Recs for User ID: {target_user_for_recs} (Top 5)...")
-            recs = get_user_based_collaborative_recommendations(
-                target_user_for_recs, model_components, books_information, 5
+            # Using hardcoded DEFAULT_N_RECS and DEFAULT_K_SIMILAR
+            print(f"\nGenerating On-the-fly Mean Centered CF Recs for User ID: {target_user} (Top {DEFAULT_N_RECS}, using {DEFAULT_K_SIMILAR} similar users)...")
+            print("This may take time...")
+            
+            recs = get_user_based_collaborative_recommendations_on_fly(
+                target_user, model_components, books_info 
+                # Defaults for top_n_recs and top_k_similar_users will be used from function signature
             )
+            
             if isinstance(recs, str): print(recs)
             elif recs:
-                for r in recs: print(f"- \"{r['title']}\" (ID: {r['book_id']}, Score: {r['score']})")
-            else: print(f"No CF recs generated for User {target_user_for_recs}")
-
-            # Example of single pair scoring for this user
-            if model_components["unique_book_ids_filtered"].size > 0:
-                bid_score_test = None
-                user_m_idx_example = model_components["user_to_idx"].get(target_user_for_recs) # Get mapped index safely
-                if user_m_idx_example is not None: # Ensure user is in map before indexing sparse matrix
-                    for b_test_id in model_components["unique_book_ids_filtered"]:
-                        b_m_idx_test = model_components["book_to_idx"][b_test_id]
-                        if model_components["sparse_user_item_matrix"][user_m_idx_example, b_m_idx_test] == 0: # Not rated
-                            bid_score_test = b_test_id
-                            break
-                if bid_score_test:
-                    score = get_collaborative_score_for_user_book_pair(target_user_for_recs, bid_score_test, model_components)
-                    title = books_information.loc[books_information['book_id'] == bid_score_test, 'title'].iloc[0]
-                    print(f"\nPredicted score for User {target_user_for_recs}, Book {bid_score_test} ('{title}'): {score}")
-    else: 
-        print("Collaborative Filtering model could not be built (e.g., data filtering resulted in empty set or error during build).")
+                for r in recs: print(f"- \"{r['title']}\" (ID: {r['book_id']}, Predicted Score: {r['score']})")
+            else: print(f"No CF recs for User {target_user}")
+    else: print("CF model components could not be built.")
