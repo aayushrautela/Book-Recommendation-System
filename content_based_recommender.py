@@ -4,38 +4,8 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 import argparse 
-import nltk
-from nltk.stem import WordNetLemmatizer
-from nltk.tokenize import word_tokenize
-
-# Local NLTK data setup.
-NLTK_DATA_DIR = 'nltk_data'
-if not os.path.exists(NLTK_DATA_DIR):
-    os.mkdir(NLTK_DATA_DIR)
-if NLTK_DATA_DIR not in nltk.data.path:
-    nltk.data.path.append(NLTK_DATA_DIR)
-
-# Download NLTK data packages if missing.
-try:
-    nltk.data.find('tokenizers/punkt', paths=[NLTK_DATA_DIR])
-except LookupError:
-    print(f"Downloading 'punkt' package to '{NLTK_DATA_DIR}'...")
-    nltk.download('punkt', download_dir=NLTK_DATA_DIR)
-try:
-    nltk.data.find('corpora/wordnet', paths=[NLTK_DATA_DIR])
-except LookupError:
-    print(f"Downloading 'wordnet' package to '{NLTK_DATA_DIR}'...")
-    nltk.download('wordnet', download_dir=NLTK_DATA_DIR)
-
 
 DATA_DIR = 'data'
-
-def lemmatize_text(text):
-    # Reduces words to their root form.
-    lemmatizer = WordNetLemmatizer()
-    tokens = word_tokenize(text.lower())
-    lemmatized_tokens = [lemmatizer.lemmatize(token) for token in tokens]
-    return ' '.join(lemmatized_tokens)
 
 def load_and_prepare_content_data():
     # Loads and prepares all data needed for the content-based model.
@@ -47,12 +17,13 @@ def load_and_prepare_content_data():
         print(f"Content-based: Error loading datasets: {e}")
         return None
 
+    # Filter tags by a minimum relevance count.
     MIN_TAG_COUNT = 100 
     relevant_book_tags = book_tags_df[book_tags_df['count'] > MIN_TAG_COUNT]
     
     book_tags_with_names_df = pd.merge(relevant_book_tags, tags_df, on='tag_id')
 
-    # Filter out common shelf tags like 'to-read', 'favorites', etc.
+    # Filter out common "shelf" tags like 'to-read', 'favorites', etc.
     non_content_tag_patterns = [
         'tbr', 'to-read', 'owned', 'reading-list', 'dnf', 
         'did-not-finish', 'favorite', 'currently-reading', 'library',
@@ -80,9 +51,6 @@ def load_and_prepare_content_data():
         books_df_merged['authors'] + ' ' + books_df_merged['authors'] + ' ' +
         books_df_merged['book_tags_string']
     )
-
-    print("Lemmatizing content text... this may take some time.")
-    books_df_merged['content'] = books_df_merged['content'].apply(lemmatize_text)
     
     content_df_intermediate = books_df_merged[['book_id', 'title', 'content', 'goodreads_book_id']].copy()
     content_df_intermediate.dropna(subset=['content'], inplace=True)
