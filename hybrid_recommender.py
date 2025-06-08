@@ -6,9 +6,9 @@ import argparse
 import content_based_recommender as cb
 import collaborative_recommender as cf # Refers to the SVD-based module
 
-TOP_N_CF_CANDIDATES = 50 
-TOP_N_ANCHOR_BOOKS = 3   
-ALPHA = 0.5 # Weight for content score vs collaborative score
+TOP_N_CF_CANDIDATES = 100 
+TOP_N_ANCHOR_BOOKS = 5   
+ALPHA = 0.4 # Weight for content score vs collaborative score; lesser the value more cf part
 TOP_N_FINAL = 10
 
 def get_top_n_anchor_books_for_user(user_id, ratings_data_to_use, books_info_df, top_n=TOP_N_ANCHOR_BOOKS):
