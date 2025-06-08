@@ -4,15 +4,15 @@ import os
 import argparse 
 
 import content_based_recommender as cb
-import collaborative_recommender as cf 
+import collaborative_recommender as cf # Refers to the SVD-based module
 
-TOP_N_CF_CANDIDATES = 50 # Initial candidates from CF for hybrid processing.
-TOP_N_ANCHOR_BOOKS = 5   # Number of user's top books for content matching.
-ALPHA = 0.40              # Weight for combining content vs. collaborative scores.
-TOP_N_FINAL = 10         # Final number of hybrid recommendations.
+TOP_N_CF_CANDIDATES = 50 
+TOP_N_ANCHOR_BOOKS = 3   
+ALPHA = 0.5 # Weight for content score vs collaborative score
+TOP_N_FINAL = 10
 
 def get_top_n_anchor_books_for_user(user_id, ratings_data_to_use, books_info_df, top_n=TOP_N_ANCHOR_BOOKS):
-    # Gets user's top N rated books to use as content anchors.
+    # Gets user's top N rated books as content anchors.
     user_ratings = ratings_data_to_use[ratings_data_to_use['user_id'] == user_id]
     if user_ratings.empty: return []
 
@@ -21,7 +21,7 @@ def get_top_n_anchor_books_for_user(user_id, ratings_data_to_use, books_info_df,
     if top_rated_books_df.empty: return []
         
     anchor_book_ids = top_rated_books_df['book_id'].tolist()
-    print(f"Hybrid: Identified {len(anchor_book_ids)} anchor(s) for User ID {user_id}.") # User feedback.
+    print(f"Hybrid: Identified {len(anchor_book_ids)} anchor(s) for User ID {user_id}.")
     return anchor_book_ids
 
 def normalize_scores(scores_dict, new_min=0, new_max=1):
@@ -31,7 +31,7 @@ def normalize_scores(scores_dict, new_min=0, new_max=1):
     if not values: return {}
     min_val, max_val = min(values), max(values)
     
-    if max_val == min_val: # All scores are identical.
+    if max_val == min_val: 
         return {book_id: (new_min + new_max) / 2.0 for book_id in scores_dict}
     return {
         book_id: new_min + ((score - min_val) * (new_max - new_min) / (max_val - min_val))
@@ -39,69 +39,65 @@ def normalize_scores(scores_dict, new_min=0, new_max=1):
     }
 
 def get_hybrid_recommendations(target_user_id, list_of_anchor_book_ids,
-                               collab_model_comps, books_info_for_titles, 
+                               collab_model, all_books_info_df, # Now takes the trained CF model
                                content_cos_sim_matrix, content_books_data_for_cb, content_book_id_to_idx_map,
                                top_n_cf_candidates=TOP_N_CF_CANDIDATES, alpha=ALPHA, top_n_final=TOP_N_FINAL):
-    # Generates hybrid recommendations by combining CF and CB scores.
-    if not list_of_anchor_book_ids and alpha > 0: # Content has weight but no anchors.
+    # Generates hybrid recommendations using SVD model for CF part.
+    if not list_of_anchor_book_ids and alpha > 0:
         print(f"Hybrid Warning: No anchor books for User ID {target_user_id} for content scoring.")
 
-    # Get CF candidates; CF function uses its internal default for num_similar_users.
-    cf_recs_list = cf.get_user_based_collaborative_recommendations_on_fly(
-        target_user_id, collab_model_comps, books_info_for_titles, 
-        top_n_recs=top_n_cf_candidates 
-    )
-    if isinstance(cf_recs_list, str) or not cf_recs_list: # Handle error or empty list from CF.
+    # Get initial candidate books from the Collaborative Filtering SVD model.
+    cf_recs_list = cf.get_top_n_cf_recommendations(collab_model, target_user_id, all_books_info_df, n=top_n_cf_candidates)
+    
+    if isinstance(cf_recs_list, str) or not cf_recs_list: 
         print(f"Hybrid: CF issue or no initial candidates: {cf_recs_list if isinstance(cf_recs_list, str) else 'empty list'}")
         return []
 
     raw_cf_scores = {rec['book_id']: rec['score'] for rec in cf_recs_list}
-    normalized_cf_scores = normalize_scores(raw_cf_scores) # Normalize CF scores to 0-1.
+    normalized_cf_scores = normalize_scores(raw_cf_scores)
     
     candidate_ids_from_cf = list(normalized_cf_scores.keys())
-    final_hybrid_scores = {} # Stores {book_id: final_hybrid_score}.
+    final_hybrid_scores = {}
 
     for cand_id in candidate_ids_from_cf:
         norm_cf_score_val = normalized_cf_scores.get(cand_id, 0)
-        avg_content_sim_score = 0.0 # Default content score.
+        avg_content_sim_score = 0.0
 
-        # Calculate average content similarity if anchors exist and content component has weight.
         if list_of_anchor_book_ids and alpha > 0: 
-            content_similarities_for_candidate = []
+            content_sims = []
             for anchor_id in list_of_anchor_book_ids:
-                # Both anchor and candidate must be known to the content model.
                 if anchor_id in content_book_id_to_idx_map and cand_id in content_book_id_to_idx_map:
                     pair_similarity = cb.get_similarity_score_for_book_pair(
                         anchor_id, cand_id, content_cos_sim_matrix, content_book_id_to_idx_map
                     )
-                    if isinstance(pair_similarity, (float, np.number)): # Check for valid numeric score.
-                        content_similarities_for_candidate.append(pair_similarity)
+                    if isinstance(pair_similarity, (float, np.number)): 
+                        content_sims.append(pair_similarity)
             
-            if content_similarities_for_candidate: # If any valid scores found.
-                avg_content_sim_score = sum(content_similarities_for_candidate) / len(content_similarities_for_candidate)
+            if content_sims: 
+                avg_content_sim_score = sum(content_sims) / len(content_sims)
         
-        norm_content_score_val = avg_content_sim_score # Cosine similarity is already 0-1.
-
-        hybrid_score = (alpha * norm_content_score_val) + ((1 - alpha) * norm_cf_score_val) # Weighted sum.
+        norm_content_score_val = avg_content_sim_score 
+        hybrid_score = (alpha * norm_content_score_val) + ((1 - alpha) * norm_cf_score_val)
         final_hybrid_scores[cand_id] = hybrid_score
 
     sorted_hybrid_recs = sorted(final_hybrid_scores.items(), key=lambda item: item[1], reverse=True)
     
     output_list = []
-    for book_id, h_score in sorted_hybrid_recs[:top_n_final]: # Format top N final results.
-        title_series = books_info_for_titles.loc[books_info_for_titles['book_id'] == book_id, 'title']
+    for book_id, h_score in sorted_hybrid_recs[:top_n_final]:
+        title_series = all_books_info_df.loc[all_books_info_df['book_id'] == book_id, 'title']
         title_val = title_series.iloc[0] if not title_series.empty else f"Book ID {book_id}"
         output_list.append({'book_id': book_id, 'title': title_val, 'hybrid_score': round(h_score, 4)})
     return output_list
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Hybrid Book Recommender System.")
-    parser.add_argument("user_id", type=int, help="User ID for recommendations.")
+    parser.add_argument("user_id", type=int, help="User ID for whom to generate recommendations.")
     args = parser.parse_args()
 
     print(f"Initializing Hybrid Recommender System for User ID: {args.user_id}...")
 
-    # Setup Content-Based model.
+    # 1. Setup Content-Based Model
+    print("Setting up Content-Based Model...")
     cb_prep_data = cb.load_and_prepare_content_data()
     cb_sim_matrix, cb_books_data, cb_book_map, _ = (None, None, None, None)
     if cb_prep_data is not None and not cb_prep_data.empty:
@@ -109,112 +105,46 @@ if __name__ == "__main__":
     if cb_sim_matrix is None: exit("Hybrid Error: Failed Content-Based model initialization.")
     print("Content-Based Model setup complete.")
 
-    # Setup Collaborative Filtering model.
-    print("\nSetting up Collaborative Filtering Model...")
-    cf_all_ratings, cf_all_books, _ = cf.load_all_collaborative_data() 
-    
-    cf_model_components_dict = None 
-    if cf_all_ratings is None or cf_all_books is None : 
-        exit("Hybrid Error: Failed to load data for CF model.")
-    
-    cf_model_components_dict = cf.build_collaborative_model_components_on_all_data(cf_all_ratings) 
-    
-    if cf_model_components_dict is None : 
-        print("CF Model components could not be built. Fallback may be attempted.")
-    else: 
-        print("Collaborative Filtering Model setup complete.")
+    # 2. Load the PRE-TRAINED Collaborative Filtering Model
+    print("\nLoading Collaborative Filtering Model...")
+    cf_model = cf.load_model()
+    if cf_model is None:
+        print("\nERROR: Collaborative Filtering model checkpoint not found.")
+        print("Please run 'python collaborative_recommender.py train' first to train and save the model.")
+        exit()
+    print("Collaborative Filtering Model loaded successfully.")
+
+    # We still need the original ratings data for anchor book selection
+    # and the books_df for titles.
+    all_ratings_data, all_books_info = cf.load_data_for_surprise()
+    if all_ratings_data is None: exit("Hybrid Error: Could not load data for anchor book selection.")
 
     target_user = args.user_id
     print(f"\nGenerating recommendations for User ID: {target_user}...")
     
-    user_has_ratings_flag = not cf_all_ratings[cf_all_ratings['user_id'] == target_user].empty
+    # Get anchor books from all ratings for the target user
+    # all_ratings_data from surprise is not a df, we need to access its .df attribute
+    anchor_book_ids_list = get_top_n_anchor_books_for_user(
+        target_user, all_ratings_data.df, all_books_info
+    )
+    valid_anchor_ids = [aid for aid in anchor_book_ids_list if aid in cb_book_map] if anchor_book_ids_list else []
 
-    if not user_has_ratings_flag:
-        print(f"User ID {target_user} has no ratings. Cannot generate recommendations.")
+    # Check if user exists in the CF model's training set
+    try:
+        cf_model.trainset.to_inner_uid(target_user)
+    except ValueError:
+        print(f"Warning: User ID {target_user} was not part of the training set for the CF model. Predictions may be based on global average.")
+
+    hybrid_recs = get_hybrid_recommendations(
+        target_user, valid_anchor_ids,
+        cf_model, all_books_info, 
+        cb_sim_matrix, cb_books_data, cb_book_map,
+        alpha=ALPHA
+    )
+
+    if hybrid_recs:
+        print(f"\nTop {TOP_N_FINAL} Hybrid Recommendations (alpha={ALPHA}):")
+        for r_item in hybrid_recs:
+            print(f"- \"{r_item['title']}\" (Book ID: {r_item['book_id']}, Hybrid Score: {r_item['hybrid_score']})")
     else:
-        # Get anchor books from all ratings for the target user.
-        anchor_book_ids_list = get_top_n_anchor_books_for_user(
-            target_user, cf_all_ratings, cf_all_books 
-        )
-        # Filter anchor books to those present in the content model.
-        valid_anchor_ids = [aid for aid in anchor_book_ids_list if aid in cb_book_map] if anchor_book_ids_list else []
-
-        # Check if user can be processed by the CF component.
-        user_in_cf_scope_flag = cf_model_components_dict and target_user in cf_model_components_dict["user_to_idx"]
-
-        if user_in_cf_scope_flag: 
-            print(f"User ID {target_user} processable by CF. Attempting Hybrid Recommendations.")
-            hybrid_recommendations = get_hybrid_recommendations(
-                target_user, valid_anchor_ids,
-                cf_model_components_dict, cf_all_books, 
-                cb_sim_matrix, cb_books_data, cb_book_map,
-                alpha=ALPHA 
-            )
-            if hybrid_recommendations:
-                print(f"\nTop {TOP_N_FINAL} Hybrid Recommendations (alpha={ALPHA}):")
-                for r_item in hybrid_recommendations:
-                    print(f"- \"{r_item['title']}\" (Book ID: {r_item['book_id']}, Hybrid Score: {r_item['hybrid_score']})")
-            else: 
-                print(f"Hybrid: No hybrid recommendations generated for User ID {target_user}.")
-                # Deeper fallback if hybrid yields nothing but anchors existed.
-                if valid_anchor_ids: 
-                     print("Attempting pure Content-Based due to empty hybrid result with valid anchors.")
-                     # (Fallback logic as previously implemented)
-                     aggregated_fallback_recs = {} 
-                     for anchor_id_val in valid_anchor_ids:
-                         cb_recs_one_anchor = cb.get_content_based_recommendations(
-                             anchor_id_val, top_n=(TOP_N_FINAL + 5), 
-                             cos_sim_matrix=cb_sim_matrix, books_data_df=cb_books_data, 
-                             book_id_to_idx_map=cb_book_map
-                         )
-                         if isinstance(cb_recs_one_anchor, list):
-                             for rec_item in cb_recs_one_anchor:
-                                 rec_book_id_val = rec_item['book_id']
-                                 if rec_book_id_val not in valid_anchor_ids: 
-                                     if rec_book_id_val not in aggregated_fallback_recs or \
-                                        rec_item['score'] > aggregated_fallback_recs[rec_book_id_val]['highest_score']:
-                                         aggregated_fallback_recs[rec_book_id_val] = {
-                                             'title': rec_item['title'], 'highest_score': rec_item['score']
-                                         }
-                     if aggregated_fallback_recs:
-                         sorted_aggregated_list = sorted(
-                             aggregated_fallback_recs.items(), key=lambda item: item[1]['highest_score'], reverse=True
-                         )
-                         print(f"\nTop {TOP_N_FINAL} Content-Based Fallback Recommendations (aggregated):")
-                         for i, (b_id, r_data) in enumerate(sorted_aggregated_list):
-                             if i >= TOP_N_FINAL: break
-                             print(f"- \"{r_data['title']}\" (Book ID: {b_id}, Highest Similarity Score: {r_data['highest_score']})")
-                     else: print(f"Fallback: No content-based recommendations could be aggregated.")
-        
-        elif valid_anchor_ids: # User not in CF scope, but has valid anchors for CB fallback.
-            print(f"User ID {target_user} not in CF scope or CF model error. Attempting Content-Based Fallback.")
-            
-            aggregated_fallback_recs = {} 
-            for anchor_id_val in valid_anchor_ids:
-                cb_recs_one_anchor = cb.get_content_based_recommendations(
-                    anchor_id_val, top_n=(TOP_N_FINAL + 5), 
-                    cos_sim_matrix=cb_sim_matrix, books_data_df=cb_books_data, 
-                    book_id_to_idx_map=cb_book_map
-                )
-                if isinstance(cb_recs_one_anchor, list):
-                    for rec_item in cb_recs_one_anchor:
-                        rec_book_id_val = rec_item['book_id']
-                        if rec_book_id_val not in valid_anchor_ids: 
-                            if rec_book_id_val not in aggregated_fallback_recs or \
-                               rec_item['score'] > aggregated_fallback_recs[rec_book_id_val]['highest_score']:
-                                aggregated_fallback_recs[rec_book_id_val] = {
-                                    'title': rec_item['title'], 'highest_score': rec_item['score']
-                                }
-            
-            if aggregated_fallback_recs:
-                sorted_aggregated_list = sorted(
-                    aggregated_fallback_recs.items(), key=lambda item: item[1]['highest_score'], reverse=True
-                )
-                print(f"\nTop {TOP_N_FINAL} Content-Based Fallback Recommendations (aggregated):")
-                for i, (b_id, r_data) in enumerate(sorted_aggregated_list):
-                    if i >= TOP_N_FINAL: break
-                    print(f"- \"{r_data['title']}\" (Book ID: {b_id}, Highest Similarity Score: {r_data['highest_score']})")
-            else:
-                print(f"Fallback: No content-based recommendations could be aggregated.")
-        else: # No ratings or no valid anchors.
-            print(f"User ID {target_user} has no valid anchor books in content model. Cannot provide recommendations.")
+        print(f"Hybrid: No recommendations were generated for User ID {target_user}.")
