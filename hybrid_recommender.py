@@ -4,15 +4,14 @@ import os
 import argparse 
 
 import content_based_recommender as cb
-import collaborative_recommender as cf # Refers to the SVD-based module
+import collaborative_recommender as cf
 
 TOP_N_CF_CANDIDATES = 100 
-TOP_N_ANCHOR_BOOKS = 5   
-ALPHA = 0.4 # Weight for content score vs collaborative score; lesser the value more cf part
-TOP_N_FINAL = 10
+TOP_N_ANCHOR_BOOKS = 5    
+ALPHA = 0.5 # Weight for scores; lower value gives more weight to CF.
+TOP_N_FINAL = 10          
 
 def get_top_n_anchor_books_for_user(user_id, ratings_data_to_use, books_info_df, top_n=TOP_N_ANCHOR_BOOKS):
-    # Gets user's top N rated books as content anchors.
     user_ratings = ratings_data_to_use[ratings_data_to_use['user_id'] == user_id]
     if user_ratings.empty: return []
 
@@ -21,17 +20,16 @@ def get_top_n_anchor_books_for_user(user_id, ratings_data_to_use, books_info_df,
     if top_rated_books_df.empty: return []
         
     anchor_book_ids = top_rated_books_df['book_id'].tolist()
-    print(f"Hybrid: Identified {len(anchor_book_ids)} anchor(s) for User ID {user_id}.")
+    print(f"Info: Using {len(anchor_book_ids)} anchor books for User ID {user_id}.")
     return anchor_book_ids
 
 def normalize_scores(scores_dict, new_min=0, new_max=1):
-    # Scales a dictionary of scores to a 0-1 range.
     if not scores_dict: return {}
     values = list(scores_dict.values())
     if not values: return {}
     min_val, max_val = min(values), max(values)
     
-    if max_val == min_val: 
+    if max_val == min_val: # Avoids division by zero.
         return {book_id: (new_min + new_max) / 2.0 for book_id in scores_dict}
     return {
         book_id: new_min + ((score - min_val) * (new_max - new_min) / (max_val - min_val))
@@ -39,18 +37,16 @@ def normalize_scores(scores_dict, new_min=0, new_max=1):
     }
 
 def get_hybrid_recommendations(target_user_id, list_of_anchor_book_ids,
-                               collab_model, all_books_info_df, # Now takes the trained CF model
+                               collab_model, all_books_info_df,
                                content_cos_sim_matrix, content_books_data_for_cb, content_book_id_to_idx_map,
                                top_n_cf_candidates=TOP_N_CF_CANDIDATES, alpha=ALPHA, top_n_final=TOP_N_FINAL):
-    # Generates hybrid recommendations using SVD model for CF part.
     if not list_of_anchor_book_ids and alpha > 0:
-        print(f"Hybrid Warning: No anchor books for User ID {target_user_id} for content scoring.")
+        print(f"Warning: No anchor books for User {target_user_id} for content scoring.")
 
-    # Get initial candidate books from the Collaborative Filtering SVD model.
     cf_recs_list = cf.get_top_n_cf_recommendations(collab_model, target_user_id, all_books_info_df, n=top_n_cf_candidates)
     
     if isinstance(cf_recs_list, str) or not cf_recs_list: 
-        print(f"Hybrid: CF issue or no initial candidates: {cf_recs_list if isinstance(cf_recs_list, str) else 'empty list'}")
+        print(f"Info: CF model returned no candidates.")
         return []
 
     raw_cf_scores = {rec['book_id']: rec['score'] for rec in cf_recs_list}
@@ -91,49 +87,41 @@ def get_hybrid_recommendations(target_user_id, list_of_anchor_book_ids,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Hybrid Book Recommender System.")
-    parser.add_argument("user_id", type=int, help="User ID for whom to generate recommendations.")
+    parser.add_argument("user_id", type=int, help="User ID for recommendations.")
     args = parser.parse_args()
 
-    print(f"Initializing Hybrid Recommender System for User ID: {args.user_id}...")
+    print(f"Initializing for User ID: {args.user_id}...")
 
-    # 1. Setup Content-Based Model
-    print("Setting up Content-Based Model...")
+    print("Building Content-Based model...")
     cb_prep_data = cb.load_and_prepare_content_data()
     cb_sim_matrix, cb_books_data, cb_book_map, _ = (None, None, None, None)
     if cb_prep_data is not None and not cb_prep_data.empty:
         cb_sim_matrix, cb_books_data, cb_book_map, _ = cb.build_content_model(cb_prep_data)
-    if cb_sim_matrix is None: exit("Hybrid Error: Failed Content-Based model initialization.")
-    print("Content-Based Model setup complete.")
+    if cb_sim_matrix is None: exit("Error: Failed Content-Based model init.")
+    print("Content-Based model ready.")
 
-    # 2. Load the PRE-TRAINED Collaborative Filtering Model
-    print("\nLoading Collaborative Filtering Model...")
+    print("\nLoading Collaborative Filtering model...")
     cf_model = cf.load_model()
     if cf_model is None:
-        print("\nERROR: Collaborative Filtering model checkpoint not found.")
-        print("Please run 'python collaborative_recommender.py train' first to train and save the model.")
+        print("\nERROR: CF model not found. Run 'python collaborative_recommender.py train' first.")
         exit()
-    print("Collaborative Filtering Model loaded successfully.")
+    print("CF model ready.")
 
-    # We still need the original ratings data for anchor book selection
-    # and the books_df for titles.
     all_ratings_data, all_books_info = cf.load_data_for_surprise()
-    if all_ratings_data is None: exit("Hybrid Error: Could not load data for anchor book selection.")
+    if all_ratings_data is None: exit("Error: Could not load data for anchor/title lookup.")
 
     target_user = args.user_id
-    print(f"\nGenerating recommendations for User ID: {target_user}...")
+    print(f"\nGenerating recommendations for User {target_user}...")
     
-    # Get anchor books from all ratings for the target user
-    # all_ratings_data from surprise is not a df, we need to access its .df attribute
     anchor_book_ids_list = get_top_n_anchor_books_for_user(
         target_user, all_ratings_data.df, all_books_info
     )
     valid_anchor_ids = [aid for aid in anchor_book_ids_list if aid in cb_book_map] if anchor_book_ids_list else []
 
-    # Check if user exists in the CF model's training set
     try:
         cf_model.trainset.to_inner_uid(target_user)
     except ValueError:
-        print(f"Warning: User ID {target_user} was not part of the training set for the CF model. Predictions may be based on global average.")
+        print(f"Warning: User {target_user} not in CF training set.")
 
     hybrid_recs = get_hybrid_recommendations(
         target_user, valid_anchor_ids,
@@ -147,4 +135,4 @@ if __name__ == "__main__":
         for r_item in hybrid_recs:
             print(f"- \"{r_item['title']}\" (Book ID: {r_item['book_id']}, Hybrid Score: {r_item['hybrid_score']})")
     else:
-        print(f"Hybrid: No recommendations were generated for User ID {target_user}.")
+        print(f"Info: No recommendations generated for User ID {target_user}.")
