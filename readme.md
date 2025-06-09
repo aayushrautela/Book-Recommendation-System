@@ -2,9 +2,9 @@
 
 ## Project Overview
 
-This project implements a hybrid book recommendation system combining Content-Based Filtering and User-Based Collaborative Filtering techniques. The system provides book recommendations based on item features and user rating patterns.
+This project implements a hybrid book recommendation system combining Content-Based Filtering and a Model-Based Collaborative Filtering approach using **Singular Value Decomposition (SVD)**. This system provides book recommendations by leveraging both item content features and latent user/item taste profiles learned from rating patterns.
 
-The solution is implemented in Python and utilizes common data science libraries.
+The solution is implemented in Python and utilizes the pandas, scikit-learn, and scikit-surprise libraries.
 
 ## Setup Instructions
 
@@ -16,7 +16,7 @@ The solution is implemented in Python and utilizes common data science libraries
     ```
 
 2.  **Prerequisites (Python Libraries):**
-    * Python (version 3.7 or newer recommended).
+    * Python (version 3.10 or 3.11 recommended for library compatibility).
     * The required Python libraries are listed in `requirements.txt`.
     * It is recommended to use a virtual environment.
     * Install the dependencies using pip:
@@ -28,50 +28,72 @@ The solution is implemented in Python and utilizes common data science libraries
     * **Download:** This project uses the **goodbooks-10k** dataset. You need to download it from its original GitHub repository:
         [https://github.com/zygmuntz/goodbooks-10k](https://github.com/zygmuntz/goodbooks-10k)
     * **Placement:**
-        * After downloading, create a subdirectory named `data/` in the root of folder.
+        * After downloading, create a subdirectory named `data/` in the root of this cloned project.
         * Extract the downloaded dataset and place the following essential CSV files into this `data/` subdirectory:
             * `books.csv`
             * `ratings.csv`
             * `tags.csv`
             * `book_tags.csv`
-    * The project scripts expect these files to be located at `data/<filename>.csv`.
 
-## Running the Recommenders
+## Running the System (Two-Step Process)
 
-The project consists of three main Python scripts. Each script can be run from the command line using Python. Ensure your terminal's current working directory is the root of the project (i.e., the `Book-Recommendation-System` directory after cloning).
+This system requires a "training" step before recommendations can be made.
 
-1.  **Content-Based Recommender (`content_based_recommender.py`)**
-    * This script implements the content-based filtering logic.
-    * When run directly, it loads data, builds the content model (TF-IDF and cosine similarity matrix), and prints example recommendations for a predefined book and the similarity score between a pair of books.
-    * To run:
+### Step 1: Train the Collaborative Filtering Model
+
+The SVD model needs to be trained on the rating data first. This process will learn the latent factors and save a `cf_svd_model.joblib` file (a "pretrained checkpoint").
+
+* To train the model with the optimized default parameters, run:
+    ```bash
+    python collaborative_recommender.py train
+    ```
+* This will run for a set number of epochs and only needs to be done once, or whenever you want to retrain the model.
+
+### Step 2: Generate Recommendations
+
+Once the model is trained, you can get recommendations using the following scripts.
+
+1.  **Hybrid Recommender (`hybrid_recommender.py`) - Recommended**
+    * This is the main script. It loads the pretrained CF model and the CB model to provide blended recommendations for a specific user.
+    * To run, provide a `user_id`:
         ```bash
-        python content_based_recommender.py
+        python hybrid_recommender.py <user_id>
         ```
+        *Example:* `python hybrid_recommender.py 100`
 
-2.  **User-Based Collaborative Filtering Recommender (`collaborative_recommender.py`)**
-    * This script implements the user-based collaborative filtering logic.
-    * It filters the dataset based on `MIN_RATINGS_PER_USER` and `MIN_RATINGS_PER_BOOK` parameters (defined within the script) to manage memory, then builds a sparse user-item matrix and a user-user similarity matrix.
-    * When run directly, it prints example recommendations for a predefined user and a predicted score for a specific user-book pair.
-    * To run:
+2.  **Standalone Content-Based Recommender (`content_based_recommender.py`)**
+    * This script provides recommendations based only on content similarity to a specific book.
+    * To run, provide a `book_id`:
         ```bash
-        python collaborative_recommender.py <user>
+        python content_based_recommender.py <book_id>
         ```
-    * **Note:** The filtering parameters within this script (`MIN_RATINGS_PER_USER`, `MIN_RATINGS_PER_BOOK`) may need adjustment based on available system memory. The current values (e.g., 150, 50) have been tested to work on systems with moderate RAM.
+        *Example:* `python content_based_recommender.py 6`
 
-3.  **Hybrid Recommender (`hybrid_recommender.py`)**
-    * This script combines the content-based and collaborative filtering approaches using a weighted strategy.
-    * It imports and utilizes the functionalities from the other two scripts.
-    * When run directly, it initializes both models, selects an example user, finds anchor books for that user (based on their highest ratings), and then generates and prints hybrid recommendations.
-    * The `ALPHA` parameter (for weighting content vs. collaborative scores) and `TOP_N_ANCHOR_BOOKS` can be adjusted within this script.
-    * To run:
+3.  **Standalone Collaborative Filtering Recommender (`collaborative_recommender.py`)**
+    * This script uses the pretrained SVD model to provide recommendations based only on collaborative filtering.
+    * To run, use the `recommend` action and provide a `user_id`:
         ```bash
-        python hybrid_recommender.py <user>
+        python collaborative_recommender.py recommend --user_id <user_id>
         ```
+        *Example:* `python collaborative_recommender.py recommend --user_id 100`
+
+---
+### Optional: Hyperparameter Tuning (`evaluate.py`) (WIP)
+
+To find the best parameters for the SVD model, you can run the evaluation script.
+
+* This script uses `GridSearchCV` to test multiple parameter combinations and will print the best ones based on RMSE. It saves the results to `tuning_results.csv` and generates a heatmap plot `tuning_heatmap.png`.
+* **Warning:** This process is very time-consuming.
+* To run:
+    ```bash
+    python evaluate.py
+    ```
 
 ## Code Structure
 
 * `content_based_recommender.py`: Contains all logic for the content-based filtering approach.
-* `collaborative_recommender.py`: Contains all logic for the user-based collaborative filtering approach, including data filtering and sparse matrix operations.
-* `hybrid_recommender.py`: Implements the hybrid model by leveraging the other two modules. It combines their outputs to produce a final set of recommendations.
-* `data/` (directory): This directory needs to be created by you and populated with the CSV files from the goodbooks-10k dataset as per the "Dataset" instructions.
+* `collaborative_recommender.py`: Implements the SVD model-based collaborative filtering, including training and inference.
+* `hybrid_recommender.py`: Combines the two models to produce final recommendations.
+* `evaluate.py`: Used for hyperparameter tuning and evaluation of the SVD model.
+* `data/`: Directory where the dataset CSV files must be placed.
 * `requirements.txt`: Lists all Python dependencies.

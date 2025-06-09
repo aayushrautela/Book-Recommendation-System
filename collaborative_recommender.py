@@ -9,11 +9,11 @@ from surprise.model_selection import train_test_split
 DATA_DIR = 'data'
 CF_MODEL_CHECKPOINT_PATH = 'cf_svd_model.joblib'
 
-# Use the best parameters found during hyperparameter tuning.
+# Use the best parameters found during hyperparameter tuning. 
 DEFAULT_N_FACTORS = 100
-DEFAULT_N_EPOCHS = 20
-DEFAULT_LR = 0.005
-DEFAULT_REG = 0.02
+DEFAULT_N_EPOCHS = 30
+DEFAULT_LR = 0.015
+DEFAULT_REG = 0.08
 
 def load_data_for_surprise():
     """Loads ratings data and prepares it for the surprise library."""
